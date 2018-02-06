@@ -93,60 +93,116 @@ ggRGB(sentinel_20170706_10m, r=2, g=4, b=3,
 
 
 
-## 2) correct for clouds ####
-# RStoolbox::cloudMask() can´t be used, as no thermal infrared band is delivered in Sentinel-2 data.
+## 2A) correct for clouds via supervised Classification ####
+# RStoolbox::cloudMask() can´t be used, as no thermal infrared band (tir) is delivered in Sentinel-2 data.
 # Alternative approach: run a supervised classification to classify cloud pixels.
 
-### in QGIS: create vector data with polygons for 3 classes: cloud, shadow, land ---> these are training data for a cloud classification
+# in QGIS: create vector data with polygons for 3 classes: cloud, shadow, land 
+# ---> training- and validation data for a cloud classification
+
+# read in the Satellite image with clouds
+sentinel_20170706_10m <- brick("raster/S2A_MSIL2A_20170706T102021_N0205_R065_T32UNA_20170706T102301/S2A_MSIL2A_20170706_tiff/sentinel_20170706_10m.grd")
 
 # read vector data in R
 td_cmask_sentinel_20170706_10 <- readOGR(dsn="vector", layer="cmask_sentinel_20170706_10")
+vd_cmask_sentinel_20170706_10 <- readOGR(dsn="vector", layer="vd_cmask_sentinel_20170706_10")
 
-# run a supervised classification and plot the result
+
+
+
+########## 1. run a supervised classification with only training data and plot the result
 cmask_sentinel_20170706_10 <- superClass(img = sentinel_20170706_10m,
                                       model = "rf", 
-                                      trainData = td_cmask_sentinel_20170706,
-                                      trainPartition = 0.6, # 60% of training data are used for training, 40% are used for validation
+                                      trainData = td_cmask_sentinel_20170706_10,
+                                      trainPartition = 0.7, # 70% of training data are used for training, 40% are used for validation
                                       responseCol = "id")
 # plot the resulting "map"
 cols =c("1"="white", "2"="darkblue", "3"="khaki")
-ggR(cmask_sentinel_20170706$map, forceCat = TRUE, geom_raster = TRUE) +
-  ggtitle("cmask_sentinel_20170706_10\nSupervised classification - model: rf") +
+ggR(cmask_sentinel_20170706_10$map, forceCat = TRUE, geom_raster = TRUE) +
+  ggtitle("cmask_sentinel_20170706_10\nSupervised classification\nmodel: rf, trainPartition: 0.7") +
+  theme(plot.title = element_text(size = 12, colour = "black", face="bold"), 
+        legend.title= element_text(size=11, colour="black", face="bold")) +
+  scale_fill_manual(values = cols, 
+                    labels=c("Class1: Clouds", "Class2: Shadows", "Class3: Land"), 
+                    name = "Cloudmask\nClasses\n")
+## --> water is classified as cloud shadows!
+
+# check the accuracy and safe the result
+cmask_sentinel_20170706_10$modelFit
+cmask_sentinel_20170706_10$validation$performance # overall accuracy: 0.9893
+writeRaster(cmask_sentinel_20170706_10$map, "results/Sentinel/cmask_sentinel_20170706_10.grd")
+
+
+
+
+########## 2. run a supervised classification with training and validation data
+cmask_2_sentinel_20170706_10 <- superClass(img = sentinel_20170706_10m,
+                                         model = "rf", 
+                                         trainData = td_cmask_sentinel_20170706_10,
+                                         valData=vd_cmask_sentinel_20170706_10,
+                                         responseCol = "id")
+
+# plot the resulting "map"
+cols =c("1"="white", "2"="darkblue", "3"="khaki")
+ggR(cmask_2_sentinel_20170706_10$map, forceCat = TRUE, geom_raster = TRUE) +
+  ggtitle("cmask_2_sentinel_20170706_10\nSupervised classification\nmodel: rf, training + validation data") +
   theme(plot.title = element_text(size = 12, colour = "black", face="bold"), 
         legend.title= element_text(size=11, colour="black", face="bold")) +
   scale_fill_manual(values = cols, 
                     labels=c("Class1: Clouds", "Class2: Shadows", "Class3: Land"), 
                     name = "Cloudmask\nClasses\n")
 
+# check the accuracy and safe result
+cmask_2_sentinel_20170706_10$modelFit
+cmask_2_sentinel_20170706_10$validation$performance
+writeRaster(cmask_2_sentinel_20170706_10$map, "results/Sentinel/cmask_2_sentinel_20170706_10.grd")
 
 
 
-# load the data
-sentinel_20170706_10m <- brick("raster/S2A_MSIL2A_20170706T102021_N0205_R065_T32UNA_20170706T102301/S2A_MSIL2A_20170706_tiff/sentinel_20170706_10m.grd")
-
-# choose an extent with clouds and plot it.
-plotRGB(sentinel_20170706_10m, r=2, g=4, b=3, stretch="lin")
-ex = drawExtent()
-# chose extent:
-#xmin        : 505072.8 
-#xmax        : 518517.7 
-#ymin        : 5490851 
-#ymax        : 5496962 
-sentinel_20170706_10_ex = crop(sentinel_20170706_10m, ex)
-ggRGB(sentinel_20170706_10_ex, r=2, g=4, b=3, stretch = "lin")
 
 
-cmask_test_sentinel_20170706_10 = cloudMask(sentinel_20170706_10_ex, blue = B03_10m) # calculate and plot the cloud mask
-ggR(cmask_test_illu[[2]], geom_raster=TRUE) 
-plot(cmask_test_illu) # plot both the mask itself and the spectral index usedfor the threshold
-# choose the threshold for the cloudmask
+########## 3. run classification with other models and compare the accuracy
 
-# use the calculated threshold and additionally a buffer around the cloud pixels
-# plot the scene with the clouds
-cmask_final_illu = cloudMask(p194r25r26_2011_cdr_crop_new_illu, threshold = -0.95, buffer = 5, blue = 1, tir = 6)
-ggRGB(p194r25r26_2011_cdr_crop_new_illu, stretch = "lin") +
-  ggR(cmask_final_illu[[1]], ggLayer = TRUE, forceCat = TRUE, geom_raster = TRUE) +
-  scale_fill_manual(values = "red", na.value = NA)
+# --> run a loop to compare the results of 3 different models
+model_names <- c("svmRadial", "pls", "plsr")
+for (i in 1:length(model_names)){ # for the whole vector of models (model[1] to last model) ...
+  cmask_2_sentinel_20170706_10 <- superClass(sentinel_20170706_10m,
+                                             trainData=td_cmask_sentinel_20170706_10,
+                                             trainPartition=0.6,
+                                             responseCol = "id",
+                                             model=model_names[i]) # ... run the classification like so and use model[i]]
+  
+  names(cmask_2_sentinel_20170706_10$map) <- model_names[i] # directly rename the name of the layers (new name == name of used model)
+  
+  #plot each classifcation automatically within the loop
+  p <- ggR(cmask_2_sentinel_20170706_10$map, forceCat = TRUE, geom_raster = TRUE) +
+    ggtitle(paste("cmask_2_sentinel_20170706_10\nSupervised classification - model:", model_names[i])) +
+    theme(plot.title = element_text(size = 12, colour = "black", face="bold"), 
+          legend.title= element_text(size=11, colour="black", face="bold")) +
+    scale_fill_manual(values = cols, 
+                      c("Class1: Clouds", "Class2: Shadows", "Class3: Land"), 
+                      name = "Cloudmask\nClasses\n")
+  print(p) 
+  
+  
+  # for later comparison:
+  if (i==1){                              # in the first run: safe the sc-result as sc_stack
+    cmask_2_sentinel_20170706_10_stack <- cmask_2_sentinel_20170706_10$map
+    cmask_2_sentinel_20170706_10_modelFit <- cmask_2_sentinel_20170706_10$modelFit[[1]]
+  } else{                                 # later on: stack the actual sc-result with sc_stack 
+    cmask_2_sentinel_20170706_10_stack <- stack(cmask_2_sentinel_20170706_10_stack, cmask_2_sentinel_20170706_10$map)
+    cmask_2_sentinel_20170706_10_modelFit <- rbind(cmask_2_sentinel_20170706_10_modelFit, cmask_2_sentinel_20170706_10$modelFit[[1]]) # save the modelFit parameters to select model with best accuracy afterwards
+    
+  }}
+
+
+
+
+  
+## 2B) correct for clouds via the fMask approach ####
+
+
+
 
 
 ## 3) calculate Vegetaion index for later use ####
