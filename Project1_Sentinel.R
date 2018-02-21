@@ -31,6 +31,7 @@ library(RStoolbox)
 library(grid)
 library(raster)
 library(ggplot2)
+library(rgeos)
 
 
 ## 1) read in the data ####
@@ -203,19 +204,20 @@ writeRaster(cmask_2_sentinel_20170706_10$map, "results/Sentinel/cmask_2_sentinel
 
 # define the cloud pixels and safe the Raster
 cloudQuery <- cmask_2_sentinel_20170706_10$map > 2 # the query excludes the values 1 and 2, which stand for clouds and their shadows
-writeRaster(cloudQuery, "results/Sentinel/cloudQuery.grd", overwrite=TRUE)
-cloudQuery <- raster("results/Sentinel/cloudQuery.grd")
+writeRaster(cloudQuery, "results/Sentinel/cloudQuery.grd", overwrite=TRUE) # save the result
+cloudQuery <- raster("results/Sentinel/cloudQuery.grd") # reload the result (later use)
+plot(cloudQuery)# plot the query Raster to check
 
-# plot the query Raster to check
-plot(cloudQuery)
+# set cloud pixels to NA
+sentinel_20170706_10_csmasked <- sentinel_20170706_10m # create a "copy" from the raster image --> this will have the same properties
+sentinel_20170706_10_csmasked[cloudQuery == 0] <- NA # set all values which are covered by clouds to NA
+plot(sentinel_20170706_10_csmasked) # plot to check the result
 
-# mask the raster image to remove clouds and shadows
-clouds <- extract()
-sentinel_20170706_10_csmasked <- raster::mask(sentinel_20170706_10m, cloudQuery)
-sentinel_20170706_10_csmasked <- sentinel_20170706_10m[cloudQuery]
-sentinel_20170706_10_csmasked <- extract(sentinel_20170706_10m, cloudQuery)
+# adopt the band names and save the result
+band_names_sentinel <- c("AOT_10m", "B02_10m", "B03_10m", "B04_10m", "B08_10m", "TCI_10m", "WVP_10m")
+names(sentinel_20170706_10_csmasked) <- band_names_sentinel
+writeRaster(sentinel_20170706_10_csmasked, "results/Sentinel/sentinel_20170706_10_csmasked.grd", overwrite =TRUE)
 
-clouds_polygon <- rasterToPolygons(cloudQuery, fun=function(x){x>0}) # transform the raster to Polygon
 
 # plot the masked image to check
 ggRGB(sentinel_20170706_10_csmasked, r=2, g=4, b=3,
@@ -223,10 +225,7 @@ ggRGB(sentinel_20170706_10_csmasked, r=2, g=4, b=3,
   ggtitle("True color Image without clouds\n(Sentinel-2A data, 10m resolution))") +
   theme(plot.title=element_text(size=12, colour="black", face="bold"), 
         legend.title=element_text(size=10, colour = "black", face="bold")) 
-
-# save the result
-writeRaster(sentinel_20170706_10_csmasked, "results/Sentinel/sentinel_20170706_10_csmasked.grd", overwrite=TRUE)
-
+# saved as: sentinel_20170706_10_csmasked in results/Sentinel_results
 
 
 
@@ -237,15 +236,32 @@ sentinel_20170706_10_csmasked <- brick("results/Sentinel/sentinel_20170706_10_cs
 
 # calculate vegetation indices
 sentinel_20170706_10m_ndvi_msavi2 <- spectralIndices(sentinel_20170706_10_csmasked, 
-                                              red=B02_10m, 
-                                              nir=B08_10m, 
-                                              indices = "NDVI", "MSAVI2")
+                                              red=2, # red --> B02_10m
+                                              nir=5, # nir --> B08_10m
+                                              indices = c("NDVI", "MSAVI2"))
+# check the value distribution
+boxplot(sentinel_20170706_10m_ndvi_msavi2$NDVI)
+boxplot(sentinel_20170706_10m_ndvi_msavi2$MSAVI2) 
+# --> some single values are out of the range [-1, 1] 
+# --> only single values --> probably artefacts
+# remove these values/ set to NA
+sentinel_20170706_10m_ndvi_msavi2_new <- sentinel_20170706_10m_ndvi_msavi2 # create a "copy" of the raster with same properties
+sentinel_20170706_10m_ndvi_msavi2_new[sentinel_20170706_10m_ndvi_msavi2_new < -1] <- NA # set values out of range to NA
+names(sentinel_20170706_10m_ndvi_msavi2_new) <- c("NDVI", "MSAVI2") # adopt the layer names
+
+# save the results
+writeRaster(sentinel_20170706_10m_ndvi_msavi2, "results/Sentinel/sentinel_20170706_10m_ndvi_msavi2.grd")
+writeRaster(sentinel_20170706_10m_ndvi_msavi2_new, "results/Sentinel/sentinel_20170706_10m_ndvi_msavi2_new.grd")
+
+
 
 # plot the vegetation indices
-ggR(sentinel_20170706_10m_ndvi_msavi2$NDVI, stretch="lin", geom_raster = TRUE) +
+ggR(sentinel_20170706_10m_ndvi_msavi2_new$NDVI, stretch="lin", geom_raster = TRUE) +
   scale_fill_gradient2(low="darkred", mid="orange", high="darkgreen", 
                        name="NDVI-values\n", 
-                       midpoint=0) +
+                       midpoint=0, 
+                       na.value="grey95", 
+                       limits=c(-1, 1)) +
   ggtitle("NDVI\n(sentinel-2A data, 2017_07_06, csmasked)") +
   theme(legend.spacing = unit(2,"lines"), 
         plot.title = element_text(color="black", size=15, face="bold"),
@@ -253,12 +269,33 @@ ggR(sentinel_20170706_10m_ndvi_msavi2$NDVI, stretch="lin", geom_raster = TRUE) +
         axis.title.y = element_text(color="black", size=12, face="bold"), 
         legend.text = element_text(colour = "black", size = 11, face="bold"),
         legend.title = element_text(color="black", size=12, face="bold"))
+# saved as: sentinel_20170706_10m_ndvi
 
-# save the result
-writeRaster(sentinel_20170706_10m_ndvi_msavi2, "results/Sentinel/sentinel_20170706_10m_ndvi_msavi2.grd")
+ggR(sentinel_20170706_10m_ndvi_msavi2_new$MSAVI2, stretch="lin", geom_raster = TRUE) +
+  scale_fill_gradient2(low="darkred", mid="orange", high="darkgreen", 
+                       name="MSAVI2-values\n", 
+                       midpoint=0, 
+                       na.value="grey95",
+                       limits=c(-1, 1)) +
+  ggtitle("MSAVI2\n(sentinel-2A data, 2017_07_06, csmasked)") +
+  theme(legend.spacing = unit(2,"lines"), 
+        plot.title = element_text(color="black", size=15, face="bold"),
+        axis.title.x = element_text(color="black", size=12, face="bold"),
+        axis.title.y = element_text(color="black", size=12, face="bold"), 
+        legend.text = element_text(colour = "black", size = 11, face="bold"),
+        legend.title = element_text(color="black", size=12, face="bold"))
+# saved as: sentinel_20170706_10m_msavi2
 
 
 
-## 4) create + read in training data + validation data + vegetation indices ####
 
-## 5) calculate + validate classification ####
+## 4) create an extract (area within a radius of 50 kilometers around Würzburg) ####
+
+# define the coordinates of Würzburg
+Wurz <- c()
+
+# adopt the coordinates to format of Sentinel data
+
+## 5) create + read in training data + validation data + vegetation indices ####
+
+## 6) calculate + validate classification ####
