@@ -289,12 +289,82 @@ ggR(sentinel_20170706_10m_ndvi_msavi2_new$MSAVI2, stretch="lin", geom_raster = T
 
 
 
-## 4) create an extract (area within a radius of 50 kilometers around Würzburg) ####
+## 4) create an extract (buffer of certain radius around chosen coordinate) ####
 
-# define the coordinates of Würzburg
-Wurz <- c()
 
-# adopt the coordinates to format of Sentinel data
+########## 1.  define the gps-coordinates of points (could be coordinates of traps etc...)
+
+# here as example: coordinates of cities of Bavaria: Wuerzburg, Karlstadt, Aschaffenburg, schweinfurt, Hammelburg, Schlüchtern)
+gps_points <- data.frame(x=c(9.9533548, 9.7734603,  9.1355554,  10.2194228, 9.891789, 9.5255493), 
+                         y=c(49.7913044, 49.9604785, 49.9806625, 50.0492047, 50.1185626, 50.3493544), 
+                         point_names=c("Wuerzburg", "Karlstadt", "Aschaffenburg", "Schweinfurt", "Hammelburg", "Schlüchtern"), 
+                         id=c(1,2,3,4,5,6))
+coordinates(gps_points) <- c("x", "y")
+proj4string(gps_points) <- CRS("+proj=longlat +datum=WGS84")
+gps_points <- spTransform(gps_points, CRS("+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+gps_points_df <- as.data.frame(gps_points) # transform back to dataframe for plotting
+
+ggRGB(sentinel_20170706_10_csmasked, r=2, g=4, b=3,
+      stretch="lin", geom_raster=TRUE) +
+  ggtitle("Sentinel Image with selected coordinates") +
+  theme(plot.title=element_text(size=12, colour="black", face="bold"), 
+        legend.title=element_text(size=10, colour = "black", face="bold")) +
+  geom_point(data=gps_points_df,
+             aes(x=gps_points_df$x,y=gps_points_df$y), 
+             colour="red", 
+             shape=3, size=3, stroke=1.5)
+
+
+
+
+
+########## 2. Define and plot the buffers around the points
+
+# create a buffer around the coordinates (here: 40 km)
+buf_25 <- gBuffer(gps_points, width=25000, byid=TRUE) # create multiple buffers for all of the polygons
+buf_25_wurzburg <- buf_25[buf_25$id == "1",] # create the buffer around one of the coordinates
+
+# prepare the polygons for plotting
+buf_25_df <- fortify(buf_25, region="id") # transform the coordinates to dataframe
+buf_25_df_final <- merge(buf_25_df, buf_25@data, by="id") # add the information
+buf_25_wurzburg_df <- fortify(buf_25_wurzburg, region="id")
+buf_25_wurzburg_df_final <- merge(buf_25_wurzburg_df, buf_25_wurzburg@data, by="id")
+
+# plot the buffers on the Satellite image
+ggRGB(sentinel_20170706_10_csmasked, r=2, g=4, b=3,
+      stretch="lin", geom_raster=TRUE) +
+  ggtitle("Sentinel Image with selected coordinates\n(5 towns closed to Wuerzburg with buffers of 25 km radius)") +
+  theme(plot.title=element_text(size=12, colour="black", face="bold"), 
+        legend.title=element_text(size=10, colour = "black", face="bold")) +
+  geom_polygon(data=buf_25_df_final, 
+               mapping=aes(x=buf_25_df_final$long, 
+                           y=buf_25_df_final$lat,
+                           group=group), 
+               colour="orange", 
+               fill="orange", 
+               alpha=0.3) +
+  geom_polygon(data=buf_25_wurzburg_df_final, 
+               mapping=aes(x=buf_25_wurzburg_df_final$long, 
+                           y=buf_25_wurzburg_df_final$lat,
+                           group=group), 
+               colour="green", 
+               fill="green", 
+               alpha=0.3) +
+  geom_point(data=gps_points_df,
+             aes(x=gps_points_df$x,y=gps_points_df$y), 
+             colour="red", 
+             shape=3, size=3, stroke=1.5)
+# saved as: sentinel_20170706_10_csmasked_buffers25
+
+
+
+
+
+
+########## 3. Extract and plot the satellite-data within 25 km around Würzburg
+
+
+
 
 ## 5) create + read in training data + validation data + vegetation indices ####
 
